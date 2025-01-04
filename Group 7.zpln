@@ -1,0 +1,1851 @@
+﻿{
+  "paragraphs": [
+    {
+      "text": "// This particular note book is for London stock exchange. Please change the directory path for stock and factor data.\n// Also for illustration purposes this zeppelin file takes only 100 stocks and this choosing is random, we also use random numbers in our execution so the results might no be the same always. \n\nimport org.apache.hadoop.fs.{FileSystem, Path}\nimport org.apache.spark.sql.functions._\nimport org.apache.spark.sql.{DataFrame, Row, SparkSession}\nimport java.time.{LocalDate, DayOfWeek}\nimport org.joda.time.{DateTime, Days}\nimport scala.collection.mutable.ArrayBuffer\n\ndef clipRegion(history: Array[(LocalDate, Double)],start: LocalDate, end: LocalDate): Array[(LocalDate, Double)] = {\n  var trimmed = history.dropWhile(_._1.isBefore(start))\n    .takeWhile(x => x._1.isBefore(end) || x._1.isEqual(end))\n\n  if (trimmed.nonEmpty && trimmed.head._1 != start) {\n    trimmed = Array((start, trimmed.head._2)) ++ trimmed\n  }\n  if (trimmed.nonEmpty && trimmed.last._1 != end) {\n    trimmed = trimmed ++ Array((end, trimmed.last._2))\n  }\n  trimmed\n}\n\ndef fillMissingValues(history: Array[(LocalDate, Double)], start: LocalDate, end: LocalDate): Array[(LocalDate, Double)] = {\n  var cur = history\n  val filled = new ArrayBuffer[(LocalDate, Double)]()\n  var curDate = start\n\n  while (!curDate.isAfter(end)) {\n    if (cur.nonEmpty && cur.head._1.isEqual(curDate)) {\n      filled += ((curDate, cur.head._2))\n      cur = cur.tail\n    } else {\n      filled += ((curDate, cur.head._2))\n    }\n    curDate = curDate.plusDays(1)\n\n    // Skip weekends (Saturday and Sunday)\n    if (curDate.getDayOfWeek == DayOfWeek.SATURDAY || curDate.getDayOfWeek == DayOfWeek.SUNDAY) {\n      curDate = curDate.plusDays(2)\n    }\n  }\n\n  filled.toArray\n}\n\nval start = LocalDate.parse(\"2009-01-01\")\nval end = LocalDate.parse(\"2024-11-30\")",
+      "user": "sb9509_nyu_edu",
+      "dateUpdated": "2024-12-14T02:45:33+0000",
+      "progress": 0,
+      "config": {
+        "editorSetting": {
+          "language": "scala",
+          "editOnDblClick": false,
+          "completionKey": "TAB",
+          "completionSupport": true
+        },
+        "colWidth": 12,
+        "editorMode": "ace/mode/scala",
+        "fontSize": 9,
+        "results": {},
+        "enabled": true
+      },
+      "settings": {
+        "params": {},
+        "forms": {}
+      },
+      "apps": [],
+      "runtimeInfos": {},
+      "progressUpdateIntervalMs": 500,
+      "jobName": "paragraph_1734142198331_315522480",
+      "id": "paragraph_1734123659100_1919088373",
+      "dateCreated": "2024-12-14T02:09:58+0000",
+      "dateStarted": "2024-12-14T02:27:21+0000",
+      "dateFinished": "2024-12-14T02:27:21+0000",
+      "status": "FINISHED",
+      "focus": true,
+      "$$hashKey": "object:578598",
+      "results": {
+        "code": "SUCCESS",
+        "msg": [
+          {
+            "type": "TEXT",
+            "data": "import org.apache.hadoop.fs.{FileSystem, Path}\nimport org.apache.spark.sql.functions._\nimport org.apache.spark.sql.{DataFrame, Row, SparkSession}\nimport java.time.{LocalDate, DayOfWeek}\nimport org.joda.time.{DateTime, Days}\nimport scala.collection.mutable.ArrayBuffer\n\u001b[1m\u001b[34mclipRegion\u001b[0m: \u001b[1m\u001b[32m(history: Array[(java.time.LocalDate, Double)], start: java.time.LocalDate, end: java.time.LocalDate)Array[(java.time.LocalDate, Double)]\u001b[0m\n\u001b[1m\u001b[34mfillMissingValues\u001b[0m: \u001b[1m\u001b[32m(history: Array[(java.time.LocalDate, Double)], start: java.time.LocalDate, end: java.time.LocalDate)Array[(java.time.LocalDate, Double)]\u001b[0m\n\u001b[1m\u001b[34mstart\u001b[0m: \u001b[1m\u001b[32mjava.time.LocalDate\u001b[0m = 2009-01-01\n\u001b[1m\u001b[34mend\u001b[0m: \u001b[1m\u001b[32mjava.time.LocalDate\u001b[0m = 2024-11-30\n"
+          }
+        ]
+      }
+    },
+    {
+      "text": "//Change the directory path to your stocks folder\nval directoryPath = \"/user/sb9509_nyu_edu/stocks\"\n@transient lazy val fs = FileSystem.get(spark.sparkContext.hadoopConfiguration)\nval stockFiles = fs.listStatus(new Path(directoryPath)).filter(_.getPath.getName.endsWith(\".csv\")).map(_.getPath.toString).take(100) // For illustration purpose only 100 stocks are taken\n\nval stockData = stockFiles.flatMap { filePath =>\n  try {\n    val stockName = filePath.split(\"/\").last.stripSuffix(\".L.csv\")\n\n    val rawDf = spark.read.option(\"header\", false).option(\"inferSchema\", \"true\").csv(filePath)\n\n    val filteredRDD = rawDf.rdd.zipWithIndex().filter { case (_, idx) => idx >= 3 }.map(_._1)\n    val filteredDf = spark.createDataFrame(filteredRDD, rawDf.schema)\n    val columnNames = Seq(\"Date\", \"AdjClose\", \"Close\", \"Open\", \"High\", \"Low\", \"Volume\")\n    val finalDf = filteredDf.toDF(columnNames: _*)\n    val selectedDf = finalDf.select($\"Date\", $\"Close\").withColumn(\"Date\", to_date($\"Date\", \"yyyy-MM-dd\")).withColumn(\"Close\", $\"Close\".cast(\"double\"))\n\n    val stockArray = selectedDf.as[(LocalDate, Double)].collect()\n\n    if (stockArray.isEmpty || stockArray.head._1.isAfter(start)) {\n    //   println(s\"Skipping stock $stockName as it does not start on or before $start\")\n      None\n    } else {\n      val clippedStockData = clipRegion(stockArray, start, end)\n      val filledStockData = fillMissingValues(clippedStockData, start, end)\n      val filledStockDf = spark.createDataFrame(filledStockData).toDF(\"Date\", \"Close\")\n      Some((stockName, filledStockDf))\n    }\n  } catch {\n    case e: Exception =>\n      println(s\"Error processing file $filePath: ${e.getMessage}\")\n      None\n  }\n}\n",
+      "user": "sb9509_nyu_edu",
+      "dateUpdated": "2024-12-14T02:27:21+0000",
+      "progress": 0,
+      "config": {
+        "editorSetting": {
+          "language": "scala",
+          "editOnDblClick": false,
+          "completionKey": "TAB",
+          "completionSupport": true
+        },
+        "colWidth": 12,
+        "editorMode": "ace/mode/scala",
+        "fontSize": 9,
+        "results": {},
+        "enabled": true
+      },
+      "settings": {
+        "params": {},
+        "forms": {}
+      },
+      "apps": [],
+      "runtimeInfos": {
+        "jobUrl": {
+          "propertyName": "jobUrl",
+          "label": "SPARK JOB",
+          "tooltip": "View in Spark web UI",
+          "group": "spark",
+          "values": [
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1280",
+              "$$hashKey": "object:716647"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1281",
+              "$$hashKey": "object:716648"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1282",
+              "$$hashKey": "object:716649"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1283",
+              "$$hashKey": "object:716650"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1284",
+              "$$hashKey": "object:716651"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1285",
+              "$$hashKey": "object:716652"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1286",
+              "$$hashKey": "object:716653"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1287",
+              "$$hashKey": "object:716654"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1288",
+              "$$hashKey": "object:716655"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1289",
+              "$$hashKey": "object:716656"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1290",
+              "$$hashKey": "object:716657"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1291",
+              "$$hashKey": "object:716658"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1292",
+              "$$hashKey": "object:716659"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1293",
+              "$$hashKey": "object:716660"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1294",
+              "$$hashKey": "object:716661"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1295",
+              "$$hashKey": "object:716662"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1296",
+              "$$hashKey": "object:716663"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1297",
+              "$$hashKey": "object:716664"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1298",
+              "$$hashKey": "object:716665"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1299",
+              "$$hashKey": "object:716666"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1300",
+              "$$hashKey": "object:716667"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1301",
+              "$$hashKey": "object:716668"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1302",
+              "$$hashKey": "object:716669"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1303",
+              "$$hashKey": "object:716670"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1304",
+              "$$hashKey": "object:716671"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1305",
+              "$$hashKey": "object:716672"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1306",
+              "$$hashKey": "object:716673"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1307",
+              "$$hashKey": "object:716674"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1308",
+              "$$hashKey": "object:716675"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1309",
+              "$$hashKey": "object:716676"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1310",
+              "$$hashKey": "object:716677"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1311",
+              "$$hashKey": "object:716678"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1312",
+              "$$hashKey": "object:716679"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1313",
+              "$$hashKey": "object:716680"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1314",
+              "$$hashKey": "object:716681"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1315",
+              "$$hashKey": "object:716682"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1316",
+              "$$hashKey": "object:716683"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1317",
+              "$$hashKey": "object:716684"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1318",
+              "$$hashKey": "object:716685"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1319",
+              "$$hashKey": "object:716686"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1320",
+              "$$hashKey": "object:716687"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1321",
+              "$$hashKey": "object:716688"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1322",
+              "$$hashKey": "object:716689"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1323",
+              "$$hashKey": "object:716690"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1324",
+              "$$hashKey": "object:716691"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1325",
+              "$$hashKey": "object:716692"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1326",
+              "$$hashKey": "object:716693"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1327",
+              "$$hashKey": "object:716694"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1328",
+              "$$hashKey": "object:716695"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1329",
+              "$$hashKey": "object:716696"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1330",
+              "$$hashKey": "object:716697"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1331",
+              "$$hashKey": "object:716698"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1332",
+              "$$hashKey": "object:716699"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1333",
+              "$$hashKey": "object:716700"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1334",
+              "$$hashKey": "object:716701"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1335",
+              "$$hashKey": "object:716702"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1336",
+              "$$hashKey": "object:716703"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1337",
+              "$$hashKey": "object:716704"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1338",
+              "$$hashKey": "object:716705"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1339",
+              "$$hashKey": "object:716706"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1340",
+              "$$hashKey": "object:716707"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1341",
+              "$$hashKey": "object:716708"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1342",
+              "$$hashKey": "object:716709"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1343",
+              "$$hashKey": "object:716710"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1344",
+              "$$hashKey": "object:716711"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1345",
+              "$$hashKey": "object:716712"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1346",
+              "$$hashKey": "object:716713"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1347",
+              "$$hashKey": "object:716714"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1348",
+              "$$hashKey": "object:716715"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1349",
+              "$$hashKey": "object:716716"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1350",
+              "$$hashKey": "object:716717"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1351",
+              "$$hashKey": "object:716718"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1352",
+              "$$hashKey": "object:716719"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1353",
+              "$$hashKey": "object:716720"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1354",
+              "$$hashKey": "object:716721"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1355",
+              "$$hashKey": "object:716722"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1356",
+              "$$hashKey": "object:716723"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1357",
+              "$$hashKey": "object:716724"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1358",
+              "$$hashKey": "object:716725"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1359",
+              "$$hashKey": "object:716726"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1360",
+              "$$hashKey": "object:716727"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1361",
+              "$$hashKey": "object:716728"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1362",
+              "$$hashKey": "object:716729"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1363",
+              "$$hashKey": "object:716730"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1364",
+              "$$hashKey": "object:716731"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1365",
+              "$$hashKey": "object:716732"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1366",
+              "$$hashKey": "object:716733"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1367",
+              "$$hashKey": "object:716734"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1368",
+              "$$hashKey": "object:716735"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1369",
+              "$$hashKey": "object:716736"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1370",
+              "$$hashKey": "object:716737"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1371",
+              "$$hashKey": "object:716738"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1372",
+              "$$hashKey": "object:716739"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1373",
+              "$$hashKey": "object:716740"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1374",
+              "$$hashKey": "object:716741"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1375",
+              "$$hashKey": "object:716742"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1376",
+              "$$hashKey": "object:716743"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1377",
+              "$$hashKey": "object:716744"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1378",
+              "$$hashKey": "object:716745"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1379",
+              "$$hashKey": "object:716746"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1380",
+              "$$hashKey": "object:716747"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1381",
+              "$$hashKey": "object:716748"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1382",
+              "$$hashKey": "object:716749"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1383",
+              "$$hashKey": "object:716750"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1384",
+              "$$hashKey": "object:716751"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1385",
+              "$$hashKey": "object:716752"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1386",
+              "$$hashKey": "object:716753"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1387",
+              "$$hashKey": "object:716754"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1388",
+              "$$hashKey": "object:716755"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1389",
+              "$$hashKey": "object:716756"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1390",
+              "$$hashKey": "object:716757"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1391",
+              "$$hashKey": "object:716758"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1392",
+              "$$hashKey": "object:716759"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1393",
+              "$$hashKey": "object:716760"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1394",
+              "$$hashKey": "object:716761"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1395",
+              "$$hashKey": "object:716762"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1396",
+              "$$hashKey": "object:716763"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1397",
+              "$$hashKey": "object:716764"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1398",
+              "$$hashKey": "object:716765"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1399",
+              "$$hashKey": "object:716766"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1400",
+              "$$hashKey": "object:716767"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1401",
+              "$$hashKey": "object:716768"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1402",
+              "$$hashKey": "object:716769"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1403",
+              "$$hashKey": "object:716770"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1404",
+              "$$hashKey": "object:716771"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1405",
+              "$$hashKey": "object:716772"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1406",
+              "$$hashKey": "object:716773"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1407",
+              "$$hashKey": "object:716774"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1408",
+              "$$hashKey": "object:716775"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1409",
+              "$$hashKey": "object:716776"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1410",
+              "$$hashKey": "object:716777"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1411",
+              "$$hashKey": "object:716778"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1412",
+              "$$hashKey": "object:716779"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1413",
+              "$$hashKey": "object:716780"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1414",
+              "$$hashKey": "object:716781"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1415",
+              "$$hashKey": "object:716782"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1416",
+              "$$hashKey": "object:716783"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1417",
+              "$$hashKey": "object:716784"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1418",
+              "$$hashKey": "object:716785"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1419",
+              "$$hashKey": "object:716786"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1420",
+              "$$hashKey": "object:716787"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1421",
+              "$$hashKey": "object:716788"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1422",
+              "$$hashKey": "object:716789"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1423",
+              "$$hashKey": "object:716790"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1424",
+              "$$hashKey": "object:716791"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1425",
+              "$$hashKey": "object:716792"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1426",
+              "$$hashKey": "object:716793"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1427",
+              "$$hashKey": "object:716794"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1428",
+              "$$hashKey": "object:716795"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1429",
+              "$$hashKey": "object:716796"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1430",
+              "$$hashKey": "object:716797"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1431",
+              "$$hashKey": "object:716798"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1432",
+              "$$hashKey": "object:716799"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1433",
+              "$$hashKey": "object:716800"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1434",
+              "$$hashKey": "object:716801"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1435",
+              "$$hashKey": "object:716802"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1436",
+              "$$hashKey": "object:716803"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1437",
+              "$$hashKey": "object:716804"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1438",
+              "$$hashKey": "object:716805"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1439",
+              "$$hashKey": "object:716806"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1440",
+              "$$hashKey": "object:716807"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1441",
+              "$$hashKey": "object:716808"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1442",
+              "$$hashKey": "object:716809"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1443",
+              "$$hashKey": "object:716810"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1444",
+              "$$hashKey": "object:716811"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1445",
+              "$$hashKey": "object:716812"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1446",
+              "$$hashKey": "object:716813"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1447",
+              "$$hashKey": "object:716814"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1448",
+              "$$hashKey": "object:716815"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1449",
+              "$$hashKey": "object:716816"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1450",
+              "$$hashKey": "object:716817"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1451",
+              "$$hashKey": "object:716818"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1452",
+              "$$hashKey": "object:716819"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1453",
+              "$$hashKey": "object:716820"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1454",
+              "$$hashKey": "object:716821"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1455",
+              "$$hashKey": "object:716822"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1456",
+              "$$hashKey": "object:716823"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1457",
+              "$$hashKey": "object:716824"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1458",
+              "$$hashKey": "object:716825"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1459",
+              "$$hashKey": "object:716826"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1460",
+              "$$hashKey": "object:716827"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1461",
+              "$$hashKey": "object:716828"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1462",
+              "$$hashKey": "object:716829"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1463",
+              "$$hashKey": "object:716830"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1464",
+              "$$hashKey": "object:716831"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1465",
+              "$$hashKey": "object:716832"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1466",
+              "$$hashKey": "object:716833"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1467",
+              "$$hashKey": "object:716834"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1468",
+              "$$hashKey": "object:716835"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1469",
+              "$$hashKey": "object:716836"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1470",
+              "$$hashKey": "object:716837"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1471",
+              "$$hashKey": "object:716838"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1472",
+              "$$hashKey": "object:716839"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1473",
+              "$$hashKey": "object:716840"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1474",
+              "$$hashKey": "object:716841"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1475",
+              "$$hashKey": "object:716842"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1476",
+              "$$hashKey": "object:716843"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1477",
+              "$$hashKey": "object:716844"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1478",
+              "$$hashKey": "object:716845"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1479",
+              "$$hashKey": "object:716846"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1480",
+              "$$hashKey": "object:716847"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1481",
+              "$$hashKey": "object:716848"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1482",
+              "$$hashKey": "object:716849"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1483",
+              "$$hashKey": "object:716850"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1484",
+              "$$hashKey": "object:716851"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1485",
+              "$$hashKey": "object:716852"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1486",
+              "$$hashKey": "object:716853"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1487",
+              "$$hashKey": "object:716854"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1488",
+              "$$hashKey": "object:716855"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1489",
+              "$$hashKey": "object:716856"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1490",
+              "$$hashKey": "object:716857"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1491",
+              "$$hashKey": "object:716858"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1492",
+              "$$hashKey": "object:716859"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1493",
+              "$$hashKey": "object:716860"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1494",
+              "$$hashKey": "object:716861"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1495",
+              "$$hashKey": "object:716862"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1496",
+              "$$hashKey": "object:716863"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1497",
+              "$$hashKey": "object:716864"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1498",
+              "$$hashKey": "object:716865"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1499",
+              "$$hashKey": "object:716866"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1500",
+              "$$hashKey": "object:716867"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1501",
+              "$$hashKey": "object:716868"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1502",
+              "$$hashKey": "object:716869"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1503",
+              "$$hashKey": "object:716870"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1504",
+              "$$hashKey": "object:716871"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1505",
+              "$$hashKey": "object:716872"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1506",
+              "$$hashKey": "object:716873"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1507",
+              "$$hashKey": "object:716874"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1508",
+              "$$hashKey": "object:716875"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1509",
+              "$$hashKey": "object:716876"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1510",
+              "$$hashKey": "object:716877"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1511",
+              "$$hashKey": "object:716878"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1512",
+              "$$hashKey": "object:716879"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1513",
+              "$$hashKey": "object:716880"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1514",
+              "$$hashKey": "object:716881"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1515",
+              "$$hashKey": "object:716882"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1516",
+              "$$hashKey": "object:716883"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1517",
+              "$$hashKey": "object:716884"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1518",
+              "$$hashKey": "object:716885"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1519",
+              "$$hashKey": "object:716886"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1520",
+              "$$hashKey": "object:716887"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1521",
+              "$$hashKey": "object:716888"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1522",
+              "$$hashKey": "object:716889"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1523",
+              "$$hashKey": "object:716890"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1524",
+              "$$hashKey": "object:716891"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1525",
+              "$$hashKey": "object:716892"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1526",
+              "$$hashKey": "object:716893"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1527",
+              "$$hashKey": "object:716894"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1528",
+              "$$hashKey": "object:716895"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1529",
+              "$$hashKey": "object:716896"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1530",
+              "$$hashKey": "object:716897"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1531",
+              "$$hashKey": "object:716898"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1532",
+              "$$hashKey": "object:716899"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1533",
+              "$$hashKey": "object:716900"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1534",
+              "$$hashKey": "object:716901"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1535",
+              "$$hashKey": "object:716902"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1536",
+              "$$hashKey": "object:716903"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1537",
+              "$$hashKey": "object:716904"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1538",
+              "$$hashKey": "object:716905"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1539",
+              "$$hashKey": "object:716906"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1540",
+              "$$hashKey": "object:716907"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1541",
+              "$$hashKey": "object:716908"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1542",
+              "$$hashKey": "object:716909"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1543",
+              "$$hashKey": "object:716910"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1544",
+              "$$hashKey": "object:716911"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1545",
+              "$$hashKey": "object:716912"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1546",
+              "$$hashKey": "object:716913"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1547",
+              "$$hashKey": "object:716914"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1548",
+              "$$hashKey": "object:716915"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1549",
+              "$$hashKey": "object:716916"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1550",
+              "$$hashKey": "object:716917"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1551",
+              "$$hashKey": "object:716918"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1552",
+              "$$hashKey": "object:716919"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1553",
+              "$$hashKey": "object:716920"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1554",
+              "$$hashKey": "object:716921"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1555",
+              "$$hashKey": "object:716922"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1556",
+              "$$hashKey": "object:716923"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1557",
+              "$$hashKey": "object:716924"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1558",
+              "$$hashKey": "object:716925"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1559",
+              "$$hashKey": "object:716926"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1560",
+              "$$hashKey": "object:716927"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1561",
+              "$$hashKey": "object:716928"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1562",
+              "$$hashKey": "object:716929"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1563",
+              "$$hashKey": "object:716930"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1564",
+              "$$hashKey": "object:716931"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1565",
+              "$$hashKey": "object:716932"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1566",
+              "$$hashKey": "object:716933"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1567",
+              "$$hashKey": "object:716934"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1568",
+              "$$hashKey": "object:716935"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1569",
+              "$$hashKey": "object:716936"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1570",
+              "$$hashKey": "object:716937"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1571",
+              "$$hashKey": "object:716938"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1572",
+              "$$hashKey": "object:716939"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1573",
+              "$$hashKey": "object:716940"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1574",
+              "$$hashKey": "object:716941"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1575",
+              "$$hashKey": "object:716942"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1576",
+              "$$hashKey": "object:716943"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1577",
+              "$$hashKey": "object:716944"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1578",
+              "$$hashKey": "object:716945"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1579",
+              "$$hashKey": "object:716946"
+            }
+          ],
+          "interpreterSettingId": "spark"
+        }
+      },
+      "progressUpdateIntervalMs": 500,
+      "jobName": "paragraph_1734142198332_96194990",
+      "id": "paragraph_1733675346442_943907208",
+      "dateCreated": "2024-12-14T02:09:58+0000",
+      "dateStarted": "2024-12-14T02:27:21+0000",
+      "dateFinished": "2024-12-14T02:27:59+0000",
+      "status": "FINISHED",
+      "$$hashKey": "object:578599",
+      "results": {
+        "code": "SUCCESS",
+        "msg": [
+          {
+            "type": "TEXT",
+            "data": "\u001b[1m\u001b[34mdirectoryPath\u001b[0m: \u001b[1m\u001b[32mString\u001b[0m = /user/sb9509_nyu_edu/stocks\n\u001b[1m\u001b[34mfs\u001b[0m: \u001b[1m\u001b[32morg.apache.hadoop.fs.FileSystem\u001b[0m = <lazy>\n\u001b[1m\u001b[34mstockFiles\u001b[0m: \u001b[1m\u001b[32mArray[String]\u001b[0m = Array(hdfs://nyu-dataproc-m/user/sb9509_nyu_edu/stocks/1SN.L.csv, hdfs://nyu-dataproc-m/user/sb9509_nyu_edu/stocks/32ID.L.csv, hdfs://nyu-dataproc-m/user/sb9509_nyu_edu/stocks/3IN.L.csv, hdfs://nyu-dataproc-m/user/sb9509_nyu_edu/stocks/450.L.csv, hdfs://nyu-dataproc-m/user/sb9509_nyu_edu/stocks/46HA.L.csv, hdfs://nyu-dataproc-m/user/sb9509_nyu_edu/stocks/46IE.L.csv, hdfs://nyu-dataproc-m/user/sb9509_nyu_edu/stocks/47HA.L.csv, hdfs://nyu-dataproc-m/user/sb9509_nyu_edu/stocks/47IE.L.csv, hdfs://nyu-dataproc-m/user/sb9509_nyu_edu/stocks/49GP.L.csv, hdfs://nyu-dataproc-m/user/sb9509_nyu_edu/...\n"
+          }
+        ]
+      }
+    },
+    {
+      "text": "\n//Change the directory path to your factors folder\nval factorDirectoryPath = \"/user/sb9509_nyu_edu/factors/factors\"\n@transient lazy val fs = FileSystem.get(spark.sparkContext.hadoopConfiguration)\nval factorFiles = fs.listStatus(new Path(factorDirectoryPath)).filter(_.getPath.getName.endsWith(\".csv\")).map(_.getPath.toString)\n\nval factorData = factorFiles.map { filePath =>\n  val factorName = filePath.split(\"/\").last.stripSuffix(\".csv\")\n  val rawFactorDf = spark.read.option(\"header\", false).option(\"inferSchema\", \"true\").csv(filePath)\n  val filteredFactorRDD = rawFactorDf.rdd.zipWithIndex().filter { case (_, idx) => idx >= 3 }.map(_._1)\n  val filteredFactorDf = spark.createDataFrame(filteredFactorRDD, rawFactorDf.schema)\n  val factorColumnNames = Seq(\"Date\", \"AdjClose\", \"Close\", \"Open\", \"High\", \"Low\", \"Volume\")\n  val finalFactorDf = filteredFactorDf.toDF(factorColumnNames: _*)\n  val selectedFactorDf = finalFactorDf.select($\"Date\", $\"Close\").withColumn(\"Date\", to_date($\"Date\", \"yyyy-MM-dd\")).withColumn(\"Close\", $\"Close\".cast(\"double\"))\n  val factorArray = selectedFactorDf.as[(LocalDate, Double)].collect()\n  val clippedData = clipRegion(factorArray, start, end)\n  val clippedDf = spark.createDataFrame(clippedData).toDF(\"Date\", \"Close\")\n  val filledData = fillMissingValues(clippedData, start, end)\n  val filledDf = spark.createDataFrame(filledData).toDF(\"Date\", \"Close\")\n  (factorName, filledDf)\n}\n\nval factorNames = factorData.map(_._1)\nval factorArrays = factorData.map(_._2)\n\nprintln(s\"Factor Name: ${ factorNames.head}\")\nfactorArrays.head.show(5)",
+      "user": "sb9509_nyu_edu",
+      "dateUpdated": "2024-12-14T02:27:59+0000",
+      "progress": 0,
+      "config": {
+        "editorSetting": {
+          "language": "scala",
+          "editOnDblClick": false,
+          "completionKey": "TAB",
+          "completionSupport": true
+        },
+        "colWidth": 12,
+        "editorMode": "ace/mode/scala",
+        "fontSize": 9,
+        "results": {},
+        "enabled": true
+      },
+      "settings": {
+        "params": {},
+        "forms": {}
+      },
+      "apps": [],
+      "runtimeInfos": {
+        "jobUrl": {
+          "propertyName": "jobUrl",
+          "label": "SPARK JOB",
+          "tooltip": "View in Spark web UI",
+          "group": "spark",
+          "values": [
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1580",
+              "$$hashKey": "object:717794"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1581",
+              "$$hashKey": "object:717795"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1582",
+              "$$hashKey": "object:717796"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1583",
+              "$$hashKey": "object:717797"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1584",
+              "$$hashKey": "object:717798"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1585",
+              "$$hashKey": "object:717799"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1586",
+              "$$hashKey": "object:717800"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1587",
+              "$$hashKey": "object:717801"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1588",
+              "$$hashKey": "object:717802"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1589",
+              "$$hashKey": "object:717803"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1590",
+              "$$hashKey": "object:717804"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1591",
+              "$$hashKey": "object:717805"
+            }
+          ],
+          "interpreterSettingId": "spark"
+        }
+      },
+      "progressUpdateIntervalMs": 500,
+      "jobName": "paragraph_1734142198332_827302764",
+      "id": "paragraph_1733674070767_1344294911",
+      "dateCreated": "2024-12-14T02:09:58+0000",
+      "dateStarted": "2024-12-14T02:27:59+0000",
+      "dateFinished": "2024-12-14T02:28:01+0000",
+      "status": "FINISHED",
+      "$$hashKey": "object:578600",
+      "results": {
+        "code": "SUCCESS",
+        "msg": [
+          {
+            "type": "TEXT",
+            "data": "Factor Name: FVX\n+----------+------------------+\n|      Date|             Close|\n+----------+------------------+\n|2009-01-01|1.7269999980926514|\n|2009-01-02|1.7269999980926514|\n|2009-01-05| 1.694000005722046|\n|2009-01-06|1.7039999961853027|\n|2009-01-07|1.6610000133514404|\n+----------+------------------+\nonly showing top 5 rows\n\n\u001b[1m\u001b[34mfactorDirectoryPath\u001b[0m: \u001b[1m\u001b[32mString\u001b[0m = /user/sb9509_nyu_edu/factors/factors\n\u001b[1m\u001b[34mfs\u001b[0m: \u001b[1m\u001b[32morg.apache.hadoop.fs.FileSystem\u001b[0m = <lazy>\n\u001b[1m\u001b[34mfactorFiles\u001b[0m: \u001b[1m\u001b[32mArray[String]\u001b[0m = Array(hdfs://nyu-dataproc-m/user/sb9509_nyu_edu/factors/factors/FVX.csv, hdfs://nyu-dataproc-m/user/sb9509_nyu_edu/factors/factors/GSPC.csv, hdfs://nyu-dataproc-m/user/sb9509_nyu_edu/factors/factors/IXIC.csv, hdfs://nyu-dataproc-m/user/sb9509_nyu_edu/factors/factors/TYX.csv)\n\u001b[1m\u001b[34mfactorData\u001b[0m: \u001b[1m\u001b[32mArray[(String, org.apache.spark.sql.DataFrame)]\u001b[0m = Array((FVX,[Date: date, Close: double]), (GSPC,[Date: date, Close: double]), (IXIC,[Date: date, Close: double]), (TYX,[Date: date, Close: double]))\n\u001b[1m\u001b[34mfactorNames\u001b[0m: \u001b[1m\u001b[32mArray[String]\u001b[0m = Array(FVX, ...\n"
+          }
+        ]
+      }
+    },
+    {
+      "text": "import org.apache.spark.sql.{DataFrame, SparkSession}\nimport org.apache.spark.sql.functions._\nimport java.time.LocalDate\nimport scala.collection.mutable.ArrayBuffer\n\n\ndef twoWeekReturns(history: Array[(LocalDate, Double)]): Array[Double] = {\n  history.sliding(10).map(w => (w.last._2 - w.head._2) / w.head._2).toArray\n}\n\ndef dfToArray(df: DataFrame): Array[(LocalDate, Double)] = {\n  df.select(\"Date\", \"Close\").as[(LocalDate, Double)].collect().toArray\n}\n\n\nval factorsWithReturns = factorData.map { case (factorName, filledData) =>\n  val filledArray = dfToArray(filledData)\n  val factorReturns = twoWeekReturns(filledArray)\n  val factorReturnsData = filledArray.zip(factorReturns).map {\n    case ((date, close), returns) => (date, returns)\n  }\n  val factorReturnsDf = spark.createDataFrame(factorReturnsData).toDF(\"Date\", \"TwoWeekReturn\")\n  (factorName, factorReturnsDf)\n}\n\nval factorReturns: Seq[Array[Double]] = factorsWithReturns.map {\n  case (_, df) => df.as[(LocalDate, Double)].collect().map(_._2) \n}.toSeq\n\nval firstFactorReturn = factorsWithReturns.head\nprintln(s\"Factor Name: ${firstFactorReturn._1}\")\nfirstFactorReturn._2.show()\nprintln(firstFactorReturn._2.count());\n\n\nval stockWithReturns = stockData.map { case (stockName, filledData) =>\n  val filledArray = dfToArray(filledData)\n  val stockReturns = twoWeekReturns(filledArray)\n  val stockReturnsData = filledArray.zip(stockReturns).map {\n    case ((date, close), returns) => (date, returns)\n  }\n  val stockReturnsDf = spark.createDataFrame(stockReturnsData).toDF(\"Date\", \"TwoWeekReturn\")\n  (stockName, stockReturnsDf)\n}\n\nval stockReturns: Seq[Array[Double]] = stockWithReturns.map {\n  case (_, df) => df.as[(LocalDate, Double)].collect().map(_._2)\n}.toSeq\n\n",
+      "user": "sb9509_nyu_edu",
+      "dateUpdated": "2024-12-14T02:28:01+0000",
+      "progress": 33,
+      "config": {
+        "editorSetting": {
+          "language": "scala",
+          "editOnDblClick": false,
+          "completionKey": "TAB",
+          "completionSupport": true
+        },
+        "colWidth": 12,
+        "editorMode": "ace/mode/scala",
+        "fontSize": 9,
+        "results": {},
+        "enabled": true
+      },
+      "settings": {
+        "params": {},
+        "forms": {}
+      },
+      "apps": [],
+      "runtimeInfos": {
+        "jobUrl": {
+          "propertyName": "jobUrl",
+          "label": "SPARK JOB",
+          "tooltip": "View in Spark web UI",
+          "group": "spark",
+          "values": [
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1592",
+              "$$hashKey": "object:717853"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1593",
+              "$$hashKey": "object:717854"
+            }
+          ],
+          "interpreterSettingId": "spark"
+        }
+      },
+      "progressUpdateIntervalMs": 500,
+      "jobName": "paragraph_1734142198332_906848219",
+      "id": "paragraph_1733691034604_1560828063",
+      "dateCreated": "2024-12-14T02:09:58+0000",
+      "dateStarted": "2024-12-14T02:28:01+0000",
+      "dateFinished": "2024-12-14T02:28:08+0000",
+      "status": "FINISHED",
+      "$$hashKey": "object:578601",
+      "results": {
+        "code": "SUCCESS",
+        "msg": [
+          {
+            "type": "TEXT",
+            "data": "Factor Name: FVX\n+----------+--------------------+\n|      Date|       TwoWeekReturn|\n+----------+--------------------+\n|2009-01-01|-0.21192823200405655|\n|2009-01-02|-0.21077010029456497|\n|2009-01-05| -0.1434474791598377|\n|2009-01-06|-0.14671361535191785|\n|2009-01-07|-0.12462372998328199|\n|2009-01-08|0.004396965734218397|\n|2009-01-09|0.059672184610713656|\n|2009-01-12|  0.1325468332850209|\n|2009-01-13| 0.15616250263379072|\n|2009-01-14|  0.1447465357262198|\n|2009-01-15| 0.23330884134958207|\n|2009-01-16| 0.24741555734657042|\n|2009-01-19| 0.28817058505033516|\n|2009-01-20|  0.2022008461727915|\n|2009-01-21|   0.164477808135516|\n|2009-01-22| 0.18688113617071597|\n|2009-01-23|  0.1550245255587059|\n|2009-01-26| 0.17807391004731402|\n|2009-01-27| 0.27856227472753065|\n|2009-01-28| 0.06543724847088024|\n+----------+--------------------+\nonly showing top 20 rows\n\n4143\nimport org.apache.spark.sql.{DataFrame, SparkSession}\nimport org.apache.spark.sql.functions._\nimport java.time.LocalDate\nimport scala.collection.mutable.ArrayBuffer\n\u001b[1m\u001b[34mtwoWeekReturns\u001b[0m: \u001b[1m\u001b[32m(history: Array[(java.time.LocalDate, Double)])Array[Double]\u001b[0m\n\u001b[1m\u001b[34mdfToArray\u001b[0m: \u001b[1m\u001b[32m(df: org.apache.spark.sql.DataFrame)Array[(java.time.LocalDate, Double)]\u001b[0m\n\u001b[1m\u001b[34mfactorsWithReturns\u001b[0m: \u001b[1m\u001b[32mArray[(String, org.apache.spark.sql.DataFrame)]\u001b[0m = Array((FVX,[Date: date, TwoWeekReturn: double]), (GSPC,[Date: date, TwoWeekReturn: double]), (IXIC,[Date: date, TwoWeekReturn: double]), (TYX,[Date: date, TwoWeekReturn: double]))\n\u001b[1m\u001b[34mfactorReturns\u001b[0m: \u001b[1m\u001b[32mSeq[Array[Double]]\u001b[0m = WrappedArray(Array(-0.21192823200405655, -0.21077010029456497, -0.143447479159837...\n"
+          }
+        ]
+      }
+    },
+    {
+      "text": "import org.apache.commons.math3.stat.regression.OLSMultipleLinearRegression\n\ndef factorMatrix(histories: Seq[Array[Double]]): Array[Array[Double]] = {\n  val columnCount = histories.head.length\n  val mat = Array.ofDim[Double](columnCount, histories.size)\n  \n  for (i <- 0 until columnCount) {\n    mat(i) = histories.map(_(i)).toArray\n  }\n  \n  mat\n}\n\ndef featurize(factorReturns: Array[Double]): Array[Double] = {\n  val squaredValues = factorReturns.map(value => math.signum(value) * value * value)\n  val rootValues = factorReturns.map(value => math.signum(value) * math.sqrt(math.abs(value)))\n  \n  squaredValues ++ rootValues ++ factorReturns\n}\n\ndef linearModel(instrument: Array[Double], factorMatrix: Array[Array[Double]]): OLSMultipleLinearRegression = {\n  val regression = new OLSMultipleLinearRegression()\n  regression.newSampleData(instrument, factorMatrix)\n  regression\n}",
+      "user": "sb9509_nyu_edu",
+      "dateUpdated": "2024-12-14T02:28:08+0000",
+      "progress": 0,
+      "config": {
+        "editorSetting": {
+          "language": "scala",
+          "editOnDblClick": false,
+          "completionKey": "TAB",
+          "completionSupport": true
+        },
+        "colWidth": 12,
+        "editorMode": "ace/mode/scala",
+        "fontSize": 9,
+        "results": {},
+        "enabled": true
+      },
+      "settings": {
+        "params": {},
+        "forms": {}
+      },
+      "apps": [],
+      "runtimeInfos": {},
+      "progressUpdateIntervalMs": 500,
+      "jobName": "paragraph_1734142198332_1579004286",
+      "id": "paragraph_1734064011537_1201180093",
+      "dateCreated": "2024-12-14T02:09:58+0000",
+      "dateStarted": "2024-12-14T02:28:08+0000",
+      "dateFinished": "2024-12-14T02:28:09+0000",
+      "status": "FINISHED",
+      "$$hashKey": "object:578602",
+      "results": {
+        "code": "SUCCESS",
+        "msg": [
+          {
+            "type": "TEXT",
+            "data": "import org.apache.commons.math3.stat.regression.OLSMultipleLinearRegression\n\u001b[1m\u001b[34mfactorMatrix\u001b[0m: \u001b[1m\u001b[32m(histories: Seq[Array[Double]])Array[Array[Double]]\u001b[0m\n\u001b[1m\u001b[34mfeaturize\u001b[0m: \u001b[1m\u001b[32m(factorReturns: Array[Double])Array[Double]\u001b[0m\n\u001b[1m\u001b[34mlinearModel\u001b[0m: \u001b[1m\u001b[32m(instrument: Array[Double], factorMatrix: Array[Array[Double]])org.apache.commons.math3.stat.regression.OLSMultipleLinearRegression\u001b[0m\n"
+          }
+        ]
+      }
+    },
+    {
+      "text": "import org.apache.commons.math3.stat.correlation.Covariance\nimport org.apache.commons.math3.stat.correlation.PearsonsCorrelation\n\nval factorFeatures = factorMatrix(factorReturns).map(featurize)\n\nval factorWeights = stockReturns.map { stockReturn =>\n  val regression = linearModel(stockReturn, factorFeatures)\n  regression.estimateRegressionParameters()\n}.toArray\n\nval factorCor = new PearsonsCorrelation(factorMatrix(factorReturns)).getCorrelationMatrix().getData()\n\nval factorCov = new Covariance(factorMatrix(factorReturns)).getCovarianceMatrix().getData()\n\nval factorMeans = factorReturns.map { factor =>\n  factor.sum / factor.size\n}.toArray\n\n",
+      "user": "sb9509_nyu_edu",
+      "dateUpdated": "2024-12-14T02:28:09+0000",
+      "progress": 0,
+      "config": {
+        "editorSetting": {
+          "language": "scala",
+          "editOnDblClick": false,
+          "completionKey": "TAB",
+          "completionSupport": true
+        },
+        "colWidth": 12,
+        "editorMode": "ace/mode/scala",
+        "fontSize": 9,
+        "results": {
+          "0": {
+            "graph": {
+              "mode": "table",
+              "height": 228.844,
+              "optionOpen": false
+            }
+          }
+        },
+        "enabled": true
+      },
+      "settings": {
+        "params": {},
+        "forms": {}
+      },
+      "apps": [],
+      "runtimeInfos": {},
+      "progressUpdateIntervalMs": 500,
+      "jobName": "paragraph_1734142198333_1789896655",
+      "id": "paragraph_1733686453085_1782217104",
+      "dateCreated": "2024-12-14T02:09:58+0000",
+      "dateStarted": "2024-12-14T02:28:09+0000",
+      "dateFinished": "2024-12-14T02:28:09+0000",
+      "status": "FINISHED",
+      "$$hashKey": "object:578603",
+      "results": {
+        "code": "SUCCESS",
+        "msg": [
+          {
+            "type": "TEXT",
+            "data": "import org.apache.commons.math3.stat.correlation.Covariance\nimport org.apache.commons.math3.stat.correlation.PearsonsCorrelation\n\u001b[1m\u001b[34mfactorFeatures\u001b[0m: \u001b[1m\u001b[32mArray[Array[Double]]\u001b[0m = Array(Array(-0.04491357552036522, -0.009159873243636906, -0.007629637850501789, 8.07648386156335E-4, -0.4603566356685396, -0.3093658460551034, -0.29554660918483194, 0.16857981868589625, -0.21192823200405655, -0.09570722670538995, -0.08734779820065179, 0.028419155268169655), Array(-0.04442403517818098, -0.008931243649242134, -0.00543856643448454, 3.029952244355128E-4, -0.4590970488846176, -0.3074170737892753, -0.271563319996048, 0.13193467326856487, -0.21077010029456497, -0.09450525725716075, -0.07374663676727597, 0.017406758010482963), Array(-0.020577179277312067, -0.006952086862928316, -0.003675...\n"
+          }
+        ]
+      }
+    },
+    {
+      "text": "import org.apache.commons.math3.distribution.MultivariateNormalDistribution\n\nval factorsDist = new MultivariateNormalDistribution(factorMeans,factorCov)\n\nfactorsDist.sample()",
+      "user": "sb9509_nyu_edu",
+      "dateUpdated": "2024-12-14T02:28:09+0000",
+      "progress": 0,
+      "config": {
+        "editorSetting": {
+          "language": "scala",
+          "editOnDblClick": false,
+          "completionKey": "TAB",
+          "completionSupport": true
+        },
+        "colWidth": 12,
+        "editorMode": "ace/mode/scala",
+        "fontSize": 9,
+        "results": {},
+        "enabled": true
+      },
+      "settings": {
+        "params": {},
+        "forms": {}
+      },
+      "apps": [],
+      "runtimeInfos": {},
+      "progressUpdateIntervalMs": 500,
+      "jobName": "paragraph_1734142198333_311318295",
+      "id": "paragraph_1733764010887_2136444822",
+      "dateCreated": "2024-12-14T02:09:58+0000",
+      "dateStarted": "2024-12-14T02:28:09+0000",
+      "dateFinished": "2024-12-14T02:28:10+0000",
+      "status": "FINISHED",
+      "$$hashKey": "object:578604",
+      "results": {
+        "code": "SUCCESS",
+        "msg": [
+          {
+            "type": "TEXT",
+            "data": "import org.apache.commons.math3.distribution.MultivariateNormalDistribution\n\u001b[1m\u001b[34mfactorsDist\u001b[0m: \u001b[1m\u001b[32morg.apache.commons.math3.distribution.MultivariateNormalDistribution\u001b[0m = org.apache.commons.math3.distribution.MultivariateNormalDistribution@6412fbb\n\u001b[1m\u001b[34mres14\u001b[0m: \u001b[1m\u001b[32mArray[Double]\u001b[0m = Array(0.07591096045172456, 0.030329893593715407, 0.031451527874941675, -0.006740494251527159)\n"
+          }
+        ]
+      }
+    },
+    {
+      "text": "\nval parallelism = 1000\nval baseSeed = 1496\nval seeds = (baseSeed until baseSeed + parallelism)\nval seedDS = seeds.toDS().repartition(parallelism)\n\ndef instrumentTrialReturn(instrument: Array[Double], trial: Array[Double]): Double = {\n  var baseValue = instrument(0)\n  for (index <- trial.indices) {\n    baseValue += trial(index) * instrument(index + 1)\n  }\n  baseValue\n}\n\ndef trialReturn(trial: Array[Double], instruments: Seq[Array[Double]]): Double = {\n  val totalReturn = instruments.map(instrument => instrumentTrialReturn(instrument, trial)).sum\n  totalReturn / instruments.size\n}\n\nimport org.apache.commons.math3.random.MersenneTwister\n\ndef trialReturns(seed: Long, numTrials: Int, factorWeights: Seq[Array[Double]], factorMeans: Array[Double], factorCovariances: Array[Array[Double]]): Seq[Double] = {\n  val randomGenerator = new MersenneTwister(seed)\n  val multivariateNormal = new MultivariateNormalDistribution(randomGenerator, factorMeans, factorCovariances)\n\n  (0 until numTrials).map { _ =>\n    val sampledFactors = multivariateNormal.sample()\n    val trialFeatures = featurize(sampledFactors)\n    trialReturn(trialFeatures, factorWeights)\n  }\n}\n",
+      "user": "sb9509_nyu_edu",
+      "dateUpdated": "2024-12-14T02:28:10+0000",
+      "progress": 0,
+      "config": {
+        "editorSetting": {
+          "language": "scala",
+          "editOnDblClick": false,
+          "completionKey": "TAB",
+          "completionSupport": true
+        },
+        "colWidth": 12,
+        "editorMode": "ace/mode/scala",
+        "fontSize": 9,
+        "results": {},
+        "enabled": true
+      },
+      "settings": {
+        "params": {},
+        "forms": {}
+      },
+      "apps": [],
+      "runtimeInfos": {},
+      "progressUpdateIntervalMs": 500,
+      "jobName": "paragraph_1734142198333_854248857",
+      "id": "paragraph_1733764063183_502590646",
+      "dateCreated": "2024-12-14T02:09:58+0000",
+      "dateStarted": "2024-12-14T02:28:10+0000",
+      "dateFinished": "2024-12-14T02:28:10+0000",
+      "status": "FINISHED",
+      "$$hashKey": "object:578605",
+      "results": {
+        "code": "SUCCESS",
+        "msg": [
+          {
+            "type": "TEXT",
+            "data": "\u001b[1m\u001b[34mparallelism\u001b[0m: \u001b[1m\u001b[32mInt\u001b[0m = 1000\n\u001b[1m\u001b[34mbaseSeed\u001b[0m: \u001b[1m\u001b[32mInt\u001b[0m = 1496\n\u001b[1m\u001b[34mseeds\u001b[0m: \u001b[1m\u001b[32mscala.collection.immutable.Range\u001b[0m = Range 1496 until 2496\n\u001b[1m\u001b[34mseedDS\u001b[0m: \u001b[1m\u001b[32morg.apache.spark.sql.Dataset[Int]\u001b[0m = [value: int]\n\u001b[1m\u001b[34minstrumentTrialReturn\u001b[0m: \u001b[1m\u001b[32m(instrument: Array[Double], trial: Array[Double])Double\u001b[0m\n\u001b[1m\u001b[34mtrialReturn\u001b[0m: \u001b[1m\u001b[32m(trial: Array[Double], instruments: Seq[Array[Double]])Double\u001b[0m\nimport org.apache.commons.math3.random.MersenneTwister\n\u001b[1m\u001b[34mtrialReturns\u001b[0m: \u001b[1m\u001b[32m(seed: Long, numTrials: Int, factorWeights: Seq[Array[Double]], factorMeans: Array[Double], factorCovariances: Array[Array[Double]])Seq[Double]\u001b[0m\n"
+          }
+        ]
+      }
+    },
+    {
+      "text": "val numTrials = 100000\nval trials = seedDS.flatMap(seed => trialReturns(seed, numTrials / parallelism, factorWeights.toSeq, factorMeans, factorCov))\n\ntrials.cache()\n",
+      "user": "sb9509_nyu_edu",
+      "dateUpdated": "2024-12-14T02:28:10+0000",
+      "progress": 0,
+      "config": {
+        "editorSetting": {
+          "language": "scala",
+          "editOnDblClick": false,
+          "completionKey": "TAB",
+          "completionSupport": true
+        },
+        "colWidth": 12,
+        "editorMode": "ace/mode/scala",
+        "fontSize": 9,
+        "results": {},
+        "enabled": true
+      },
+      "settings": {
+        "params": {},
+        "forms": {}
+      },
+      "apps": [],
+      "runtimeInfos": {},
+      "progressUpdateIntervalMs": 500,
+      "jobName": "paragraph_1734142198333_1153502246",
+      "id": "paragraph_1733764812557_1068162726",
+      "dateCreated": "2024-12-14T02:09:58+0000",
+      "dateStarted": "2024-12-14T02:28:10+0000",
+      "dateFinished": "2024-12-14T02:28:10+0000",
+      "status": "FINISHED",
+      "$$hashKey": "object:578606",
+      "results": {
+        "code": "SUCCESS",
+        "msg": [
+          {
+            "type": "TEXT",
+            "data": "\u001b[1m\u001b[34mnumTrials\u001b[0m: \u001b[1m\u001b[32mInt\u001b[0m = 100000\n\u001b[1m\u001b[34mtrials\u001b[0m: \u001b[1m\u001b[32morg.apache.spark.sql.Dataset[Double]\u001b[0m = [value: double]\n\u001b[1m\u001b[34mres15\u001b[0m: \u001b[1m\u001b[32mtrials.type\u001b[0m = [value: double]\n"
+          }
+        ]
+      }
+    },
+    {
+      "text": "import org.apache.spark.sql.Dataset\n\ndef calculateVaR(trials: Dataset[Double]): Double = {\n  val quantiles = trials.stat.approxQuantile(\"value\", Array(0.05), 0.0)\n  val valueAtRisk = quantiles(0)\n  return valueAtRisk\n}\n\nval trialsData = trials\nval valueAtRisk = calculateVaR(trialsData)\n",
+      "user": "sb9509_nyu_edu",
+      "dateUpdated": "2024-12-14T02:28:11+0000",
+      "progress": 97,
+      "config": {
+        "editorSetting": {
+          "language": "scala",
+          "editOnDblClick": false,
+          "completionKey": "TAB",
+          "completionSupport": true
+        },
+        "colWidth": 12,
+        "editorMode": "ace/mode/scala",
+        "fontSize": 9,
+        "results": {},
+        "enabled": true
+      },
+      "settings": {
+        "params": {},
+        "forms": {}
+      },
+      "apps": [],
+      "runtimeInfos": {
+        "jobUrl": {
+          "propertyName": "jobUrl",
+          "label": "SPARK JOB",
+          "tooltip": "View in Spark web UI",
+          "group": "spark",
+          "values": [
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1594",
+              "$$hashKey": "object:717956"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1595",
+              "$$hashKey": "object:717957"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1596",
+              "$$hashKey": "object:717958"
+            }
+          ],
+          "interpreterSettingId": "spark"
+        }
+      },
+      "progressUpdateIntervalMs": 500,
+      "jobName": "paragraph_1734142198333_802673829",
+      "id": "paragraph_1733764834579_2134758315",
+      "dateCreated": "2024-12-14T02:09:58+0000",
+      "dateStarted": "2024-12-14T02:28:11+0000",
+      "dateFinished": "2024-12-14T02:28:36+0000",
+      "status": "FINISHED",
+      "$$hashKey": "object:578607",
+      "results": {
+        "code": "SUCCESS",
+        "msg": [
+          {
+            "type": "TEXT",
+            "data": "import org.apache.spark.sql.Dataset\n\u001b[1m\u001b[34mcalculateVaR\u001b[0m: \u001b[1m\u001b[32m(trials: org.apache.spark.sql.Dataset[Double])Double\u001b[0m\n\u001b[1m\u001b[34mtrialsData\u001b[0m: \u001b[1m\u001b[32morg.apache.spark.sql.Dataset[Double]\u001b[0m = [value: double]\n\u001b[1m\u001b[34mvalueAtRisk\u001b[0m: \u001b[1m\u001b[32mDouble\u001b[0m = 0.016830980115326785\n"
+          }
+        ]
+      }
+    },
+    {
+      "text": "def calculateFivePercentCVaR(trials: Dataset[Double]): Double = {\n  val trialCount = trials.count().toInt\n  val topLossesCount = math.max(trialCount / 20, 1)\n  val topLosses = trials.orderBy(\"value\").limit(topLossesCount)\n  val avgLoss = topLosses.agg(\"value\" -> \"avg\").first()(0)\n  return avgLoss.asInstanceOf[Double]\n}\n\nval trialsData = trials\nval conditionalValueAtRisk = calculateFivePercentCVaR(trialsData)\n",
+      "user": "sb9509_nyu_edu",
+      "dateUpdated": "2024-12-14T02:28:36+0000",
+      "progress": 96,
+      "config": {
+        "editorSetting": {
+          "language": "scala",
+          "editOnDblClick": false,
+          "completionKey": "TAB",
+          "completionSupport": true
+        },
+        "colWidth": 12,
+        "editorMode": "ace/mode/scala",
+        "fontSize": 9,
+        "results": {},
+        "enabled": true
+      },
+      "settings": {
+        "params": {},
+        "forms": {}
+      },
+      "apps": [],
+      "runtimeInfos": {
+        "jobUrl": {
+          "propertyName": "jobUrl",
+          "label": "SPARK JOB",
+          "tooltip": "View in Spark web UI",
+          "group": "spark",
+          "values": [
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1597",
+              "$$hashKey": "object:717997"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1598",
+              "$$hashKey": "object:717998"
+            },
+            {
+              "jobUrl": "http://nyu-dataproc-sw-wdj7.c.hpc-dataproc-19b8.internal:35945/jobs/job?id=1599",
+              "$$hashKey": "object:717999"
+            }
+          ],
+          "interpreterSettingId": "spark"
+        }
+      },
+      "progressUpdateIntervalMs": 500,
+      "jobName": "paragraph_1734142198334_633662539",
+      "id": "paragraph_1733780238806_1918310886",
+      "dateCreated": "2024-12-14T02:09:58+0000",
+      "dateStarted": "2024-12-14T02:28:36+0000",
+      "dateFinished": "2024-12-14T02:29:00+0000",
+      "status": "FINISHED",
+      "$$hashKey": "object:578608",
+      "results": {
+        "code": "SUCCESS",
+        "msg": [
+          {
+            "type": "TEXT",
+            "data": "\u001b[1m\u001b[34mcalculateFivePercentCVaR\u001b[0m: \u001b[1m\u001b[32m(trials: org.apache.spark.sql.Dataset[Double])Double\u001b[0m\n\u001b[1m\u001b[34mtrialsData\u001b[0m: \u001b[1m\u001b[32morg.apache.spark.sql.Dataset[Double]\u001b[0m = [value: double]\n\u001b[1m\u001b[34mconditionalValueAtRisk\u001b[0m: \u001b[1m\u001b[32mDouble\u001b[0m = -0.009875531602713941\n"
+          }
+        ]
+      }
+    },
+    {
+      "user": "sb9509_nyu_edu",
+      "dateUpdated": "2024-12-14T02:29:00+0000",
+      "progress": 0,
+      "config": {
+        "editorSetting": {
+          "language": "scala",
+          "editOnDblClick": false,
+          "completionKey": "TAB",
+          "completionSupport": true
+        },
+        "colWidth": 12,
+        "editorMode": "ace/mode/scala",
+        "fontSize": 9,
+        "results": {},
+        "enabled": true
+      },
+      "settings": {
+        "params": {},
+        "forms": {}
+      },
+      "apps": [],
+      "runtimeInfos": {},
+      "progressUpdateIntervalMs": 500,
+      "jobName": "paragraph_1734142198334_1207720973",
+      "id": "paragraph_1734123430362_1405147750",
+      "dateCreated": "2024-12-14T02:09:58+0000",
+      "status": "FINISHED",
+      "$$hashKey": "object:578609"
+    }
+  ],
+  "name": "Group 7",
+  "id": "2KHKX9YV5",
+  "defaultInterpreterGroup": "spark",
+  "version": "0.11.1",
+  "noteParams": {},
+  "noteForms": {},
+  "angularObjects": {},
+  "config": {
+    "isZeppelinNotebookCronEnable": false,
+    "looknfeel": "default",
+    "personalizedMode": "false"
+  },
+  "info": {
+    "isRunning": false
+  },
+  "path": "/Group 7"
+}

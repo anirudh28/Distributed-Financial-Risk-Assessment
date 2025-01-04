@@ -1,0 +1,4 @@
+GSPC
+IXIC
+TYX
+FVX
